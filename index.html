@@ -94,12 +94,11 @@
     padding: 20px; margin-bottom: 22px; box-shadow: var(--shadow);
   }
   .search-row { display: flex; gap: 10px; align-items: stretch; }
-  .search-row input {
-    flex: 1; padding: 10px 14px; border: 1px solid var(--border); border-radius: 6px;
-    font-size: 15px; font-family: inherit; background: white;
-  }
-  .search-row input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-  .search-row button { font-size: 14px; padding: 0 20px; }
+  .search-row input, .search-row select { padding: 10px 14px; border: 1px solid var(--border); border-radius: 6px; font-size: 15px; font-family: inherit; background: white; }
+  .search-row input#company-input { flex: 2; }
+  .search-row select#region-input { flex: 1; min-width: 0; cursor: pointer; }
+  .search-row input:focus, .search-row select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .search-row button { font-size: 14px; padding: 0 20px; flex-shrink: 0; }
   .search-hint { font-size: 12px; color: var(--text-muted); margin-top: 8px; }
   .search-hint code {
     background: #f0eee5; padding: 1px 6px; border-radius: 3px; font-size: 11.5px;
@@ -316,10 +315,20 @@
     <div class="search-section">
       <div class="search-row">
         <input type="text" id="company-input" placeholder="Enter a company name, e.g. B&B Group Limited" autocomplete="off" />
+        <select id="region-input">
+          <option value="">Region (optional)</option>
+          <option value="Asia">Asia</option>
+          <option value="Europe">Europe</option>
+          <option value="North America">North America</option>
+          <option value="Latin America">Latin America</option>
+          <option value="Middle East">Middle East</option>
+          <option value="Africa">Africa</option>
+          <option value="Oceania">Oceania</option>
+        </select>
         <button class="btn-primary" id="research-btn">Research</button>
       </div>
       <div class="search-hint">
-        Search what you have. The tool will normalise variations like <code>CO.,LTD.</code> vs <code>CO., LTD.</code> automatically.
+        Optionally pick a region to disambiguate when a name might match entities on multiple continents (e.g. <code>Alex S.A.</code> exists in Paraguay AND in Europe). Leave blank if unsure.
       </div>
     </div>
 
@@ -567,6 +576,7 @@ function setProgress(steps) {
 async function research() {
   if (researchInProgress) return;
   const name = companyInput.value.trim();
+  const region = document.getElementById('region-input').value.trim();
   if (!name) {
     showError('Please enter a company name.');
     return;
@@ -584,7 +594,7 @@ async function research() {
   resultEl.classList.add('hidden');
 
   const steps = [
-    { text: `Searching the web for "${name}"`, active: true, done: false },
+    { text: `Searching the web for "${name}"${region ? ' in ' + region : ''}`, active: true, done: false },
     { text: 'Reading search results',           active: false, done: false },
     { text: 'Synthesising with Qwen 3 32B',     active: false, done: false },
     { text: 'Rendering result',                 active: false, done: false },
@@ -593,7 +603,7 @@ async function research() {
 
   try {
     // Step 1: Tavily search
-    const searchResults = await tavilySearch(name);
+    const searchResults = await tavilySearch(name, region);
     if (!searchResults || !searchResults.results || searchResults.results.length === 0) {
       throw new Error('No search results returned from Tavily. Try a more specific company name.');
     }
@@ -608,13 +618,13 @@ async function research() {
     setProgress(steps);
 
     // Step 3: Groq + Qwen synthesis
-    const result = await synthesise(name, searchResults);
+    const result = await synthesise(name, region, searchResults);
     steps[2].active = false; steps[2].done = true;
     steps[3].active = true;
     setProgress(steps);
 
     // Step 4: render
-    currentResult = { ...result, _query: name, _searchedAt: new Date().toISOString() };
+    currentResult = { ...result, _query: name, _regionHint: region || null, _searchedAt: new Date().toISOString() };
     renderResult(currentResult);
     steps[3].active = false; steps[3].done = true;
     setProgress(steps);
@@ -631,9 +641,12 @@ async function research() {
 
 /* ===================== TAVILY API ===================== */
 
-async function tavilySearch(query) {
-  // Construct a query that biases toward useful sources
-  const augmented = `${query} products exporter manufacturer business`;
+async function tavilySearch(query, region) {
+  // No keyword augmentation — letting Tavily's relevance ranking do its job.
+  // Previous code added "products exporter manufacturer business" which biased
+  // results away from retailers and importers. Just use the company name,
+  // plus the region hint if the user supplied one.
+  const finalQuery = region ? `${query} ${region}` : query;
   const response = await fetch('https://api.tavily.com/search', {
     method: 'POST',
     headers: {
@@ -641,7 +654,7 @@ async function tavilySearch(query) {
       'Authorization': `Bearer ${getKey('tavily')}`,
     },
     body: JSON.stringify({
-      query: augmented,
+      query: finalQuery,
       search_depth: 'advanced',
       max_results: 5,
       include_answer: false,
@@ -658,14 +671,16 @@ async function tavilySearch(query) {
 
 /* ===================== GROQ / QWEN SYNTHESIS ===================== */
 
-async function synthesise(companyName, searchResults) {
+async function synthesise(companyName, region, searchResults) {
   const sourcesText = searchResults.results.map((r, i) =>
     `[${i+1}] ${r.title}\nURL: ${r.url}\nContent: ${(r.content || '').slice(0, 700)}`
   ).join('\n\n');
 
+  const regionHint = region ? `Known region: ${region} — when multiple distinct companies match the name, strongly prefer the entity located in this region. Use domain TLDs and address mentions in sources to verify region (e.g. .com.py / .com.br / .com.ar / .com.mx → Latin America; .com.cn / .com.hk / .co.kr / .co.jp / .com.vn → Asia; .de / .fr / .it / .es / .nl → Europe; etc.).\n\n` : '';
+
   const userPrompt = `Company name to research: ${companyName}
 
-Search results:
+${regionHint}Search results:
 ${sourcesText}
 
 Return the JSON object now.`;
