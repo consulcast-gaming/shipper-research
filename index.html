@@ -393,6 +393,60 @@ const STORAGE_KEYS = {
   history:'shipperResearch.history.v1',
 };
 
+// Region → country list used to augment the Tavily query. Country names
+// embedded in queries surface country-specific websites much better than
+// abstract region names like "Latin America" (which only matches English-
+// language directory entries, not actual Spanish/Portuguese sites).
+const REGION_COUNTRIES = {
+  'Asia':          'China Hong Kong Japan Korea Taiwan Vietnam Singapore Thailand',
+  'Europe':        'Germany France Italy Spain Netherlands United Kingdom Switzerland Belgium',
+  'North America': 'United States Canada',
+  'Latin America': 'Brazil Mexico Argentina Paraguay Chile Colombia Peru Uruguay',
+  'Middle East':   'UAE Saudi Arabia Israel Turkey Qatar Kuwait',
+  'Africa':        'South Africa Nigeria Egypt Kenya Morocco',
+  'Oceania':       'Australia New Zealand',
+};
+
+// Country-specific TLDs we can use as confident origin signals when seen in URLs
+const COUNTRY_TLDS_MULTI = [
+  '.com.py', '.com.br', '.com.ar', '.com.mx', '.com.co', '.com.pe', '.com.cl',
+  '.com.cn', '.com.hk', '.co.jp', '.co.kr', '.com.vn', '.com.tw', '.com.sg',
+  '.co.uk', '.com.au', '.co.nz', '.com.sa', '.com.tr', '.com.ph', '.com.my',
+];
+const COUNTRY_TLDS_SINGLE = {
+  '.py': 'Paraguay', '.br': 'Brazil', '.ar': 'Argentina', '.mx': 'Mexico',
+  '.cl': 'Chile', '.co': 'Colombia', '.pe': 'Peru', '.uy': 'Uruguay',
+  '.cn': 'China', '.hk': 'Hong Kong', '.jp': 'Japan', '.kr': 'Korea',
+  '.vn': 'Vietnam', '.tw': 'Taiwan', '.sg': 'Singapore', '.th': 'Thailand',
+  '.in': 'India', '.id': 'Indonesia', '.my': 'Malaysia', '.ph': 'Philippines',
+  '.de': 'Germany', '.fr': 'France', '.it': 'Italy', '.es': 'Spain',
+  '.nl': 'Netherlands', '.uk': 'UK', '.ch': 'Switzerland', '.be': 'Belgium',
+  '.pt': 'Portugal', '.pl': 'Poland', '.se': 'Sweden', '.no': 'Norway',
+  '.dk': 'Denmark', '.fi': 'Finland', '.at': 'Austria', '.ie': 'Ireland',
+  '.au': 'Australia', '.nz': 'New Zealand',
+  '.za': 'South Africa', '.ng': 'Nigeria', '.eg': 'Egypt', '.ke': 'Kenya',
+  '.tr': 'Turkey', '.il': 'Israel', '.sa': 'Saudi Arabia', '.ae': 'UAE',
+};
+
+function extractCountrySignal(url) {
+  if (!url) return null;
+  const lower = url.toLowerCase();
+  // Multi-part TLDs first (more specific)
+  for (const tld of COUNTRY_TLDS_MULTI) {
+    if (lower.includes(tld + '/') || lower.endsWith(tld)) {
+      const country = tld.replace('.com.', '.').replace('.co.', '.').slice(1);
+      const fullName = COUNTRY_TLDS_SINGLE['.' + country] || country.toUpperCase();
+      return `${tld} → ${fullName}`;
+    }
+  }
+  // Single-segment country codes
+  const m = lower.match(/\.([a-z]{2})(?:\/|$|\?)/);
+  if (m && COUNTRY_TLDS_SINGLE['.' + m[1]]) {
+    return `.${m[1]} → ${COUNTRY_TLDS_SINGLE['.' + m[1]]}`;
+  }
+  return null;
+}
+
 const SYSTEM_PROMPT = `You are a research assistant for a freight forwarding company in Hong Kong. Your job is to research shipper companies based on web search results and produce structured JSON output for classification.
 
 You will receive:
@@ -455,13 +509,15 @@ CRITICAL RULES:
 
    a) NOT blend their information together into one profile. Each fact you record must come from sources consistent with one single entity.
 
-   b) Pick the entity that is most clearly the subject of its own primary source (its own website, official registry entry, or directly-authored content). Treat the company's own domain as the strongest signal of what it actually is.
+   b) Treat country-coded domain TLDs as the STRONGEST available disambiguator. If a search result is annotated with [DOMAIN: .com.py → Paraguay], that result is almost certainly about a Paraguayan entity — full stop. A result on a generic .com or LinkedIn page is much weaker evidence about which country a company is from. When a user specifies a Known region, ALWAYS prefer results whose TLD annotation matches that region, even if another result has more text content.
 
-   c) Use domain TLDs as strong country signals: .com.py = Paraguay, .com.cn = China, .com.br = Brazil, .com.ar = Argentina, .com.hk or .hk = Hong Kong, .com.mx = Mexico, .com.vn = Vietnam, .de = Germany, etc. A company website with a country-specific TLD almost always indicates an entity operating in that country.
+   c) E-COMMERCE AND RETAIL WEBSITES ARE VALID, AUTHORITATIVE EVIDENCE. A company's own product catalog, online store, or category-navigation page is direct proof of what they sell — it is just as authoritative as a "corporate About Us" page. Do not dismiss e-commerce sites as low-quality just because their visible text is product names and category links. If alex.com.py shows categories for motorcycles, cellphones, TVs, and appliances, that IS the evidence that Alex S.A. (Paraguay) sells those things. Use it directly.
 
-   d) If you genuinely cannot tell which entity is meant, set confidence to "low" and explain the ambiguity in confidence_reason: "Multiple distinct companies match this name — found a [X] in [country] and a [Y] in [country]. Could not disambiguate from available signals." Don't guess as if they were the same company.
+   d) Pick the entity that is most clearly the subject of its own primary source. Treat the company's own domain (especially with a country-specific TLD) as the strongest signal. A LinkedIn or directory entry about a *different* company is not evidence about your subject.
 
-   e) Remember: a retailer in country X who imports goods is just as much a "shipper" in trade-data terms as a manufacturer in country Y who exports them. Don't dismiss retail businesses as unlikely shippers — they're commonly consignees on inbound shipments.
+   e) If you genuinely cannot tell which entity is meant, set confidence to "low" and explain the ambiguity in confidence_reason: "Multiple distinct companies match this name — found a [X] in [country] and a [Y] in [country]. Could not disambiguate from available signals."
+
+   f) A retailer in country X who imports goods is just as much a "shipper" in trade-data terms as a manufacturer in country Y who exports them. Do not dismiss retail or e-commerce businesses as unlikely shippers — they're commonly consignees on inbound shipments. The word "distribuidora" / "distributor" in another result's name doesn't make that other entity more likely to be the right match; both retailers and distributors appear in trade data.
 
 6. Confidence calibration:
    - "high" = at least one direct source clearly describes the company's products / business
@@ -642,11 +698,11 @@ async function research() {
 /* ===================== TAVILY API ===================== */
 
 async function tavilySearch(query, region) {
-  // No keyword augmentation — letting Tavily's relevance ranking do its job.
-  // Previous code added "products exporter manufacturer business" which biased
-  // results away from retailers and importers. Just use the company name,
-  // plus the region hint if the user supplied one.
-  const finalQuery = region ? `${query} ${region}` : query;
+  // Expand region into specific country names. Searching "Alex S.A. Latin America"
+  // returns English-language directories; searching "Alex S.A. Brazil Mexico Argentina
+  // Paraguay Chile" returns actual Latin American business sites.
+  const expansion = region && REGION_COUNTRIES[region] ? REGION_COUNTRIES[region] : (region || '');
+  const finalQuery = expansion ? `${query} ${expansion}` : query;
   const response = await fetch('https://api.tavily.com/search', {
     method: 'POST',
     headers: {
@@ -656,7 +712,7 @@ async function tavilySearch(query, region) {
     body: JSON.stringify({
       query: finalQuery,
       search_depth: 'advanced',
-      max_results: 5,
+      max_results: 6,
       include_answer: false,
       include_raw_content: false,
       include_images: false,
@@ -672,11 +728,13 @@ async function tavilySearch(query, region) {
 /* ===================== GROQ / QWEN SYNTHESIS ===================== */
 
 async function synthesise(companyName, region, searchResults) {
-  const sourcesText = searchResults.results.map((r, i) =>
-    `[${i+1}] ${r.title}\nURL: ${r.url}\nContent: ${(r.content || '').slice(0, 700)}`
-  ).join('\n\n');
+  const sourcesText = searchResults.results.map((r, i) => {
+    const tld = extractCountrySignal(r.url);
+    const tldNote = tld ? `  [DOMAIN: ${tld}]` : '';
+    return `[${i+1}] ${r.title}${tldNote}\nURL: ${r.url}\nContent: ${(r.content || '').slice(0, 700)}`;
+  }).join('\n\n');
 
-  const regionHint = region ? `Known region: ${region} — when multiple distinct companies match the name, strongly prefer the entity located in this region. Use domain TLDs and address mentions in sources to verify region (e.g. .com.py / .com.br / .com.ar / .com.mx → Latin America; .com.cn / .com.hk / .co.kr / .co.jp / .com.vn → Asia; .de / .fr / .it / .es / .nl → Europe; etc.).\n\n` : '';
+  const regionHint = region ? `Known region: ${region} — when multiple distinct companies match the name, strongly prefer the entity located in this region. The [DOMAIN:] annotations next to each result identify the country of the source's TLD (e.g. .com.py → Paraguay). Treat country-coded TLDs as the strongest disambiguator available.\n\n` : '';
 
   const userPrompt = `Company name to research: ${companyName}
 
