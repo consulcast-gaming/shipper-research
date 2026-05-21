@@ -495,40 +495,49 @@ ${COMMODITY_LABELS.join(', ')}
 
 CRITICAL RULES:
 
-1. Every factual claim should be supported by a source in sources_used. If only one or two sources actually support claims, that's fine — list those. Don't pad sources_used with irrelevant URLs.
+1. ABSOLUTE RULE — NAME-MATCH VERIFICATION (READ FIRST). Before filling in any fields about the company, verify that the requested company name appears in at least one search result's title, URL hostname, or content as a clear subject (not a passing mention). If the requested name does NOT appear as a clear subject in any result — for example, if the user asked for "Alex S.A." but the search only returned "Alex Global" or "Alex Industries" — then YOU HAVE NOT FOUND THE COMPANY. In that case:
+   - Set canonical_name to the user's input as-is (unchanged)
+   - Set country, headquarters_city, year_established, business_type, industry_sector, description, registration_number, approximate_size, and main_products ALL to null or empty arrays
+   - Set commodity_group and commodity_label to your best inference IF the user's name itself suggests a category, otherwise pick generic "Logistics services" / "LOGISTICS SERVICES" only if there's actual evidence of that role
+   - Set confidence to "low"
+   - Set confidence_reason to: "Search did not return strong profile matches for [requested name]. Most relevant results described [other entity name(s)], which appear to be different companies. Cannot reliably classify."
+   - List only sources that actually matter in sources_used
+   - Be explicit in sources_consulted_summary: "Looked for [requested name]. Search returned [list other names found]. No source profiles [requested name] directly."
 
-2. If you can't find information for a field, return null (or an empty array) — never invent. Returning null is the correct answer when sources don't say.
+2. ABSOLUTE RULE — REGION HINT IS NOT EVIDENCE. The user's "Known region" field biases the SEARCH QUERY, not the facts. You may NEVER assign country = X just because the user picked a region containing X. The country field must come from explicit content in a source — a registered address, a phone country code, a country-coded domain TLD, or a sentence in the source identifying the country. If sources do not say what country the company is in, country must be null.
 
-3. For lesser-known Chinese companies, watch for B2B directory listings (1688, Alibaba, Made-in-China), Panjiva snippets showing top HS codes and customers, Hong Kong / mainland China company registry data, and the company's own website.
+3. ABSOLUTE RULE — DIFFERENT NAMES ARE DIFFERENT COMPANIES. If a search result describes "Alex Global" but the user requested "Alex S.A.", these are PRESUMED to be different companies. Do NOT add the other name as "also_known_as". Do NOT pull the other entity's products / industry / customers / markets into the requested company's profile. The only exception: a source must EXPLICITLY state they are the same legal entity (e.g., "Alex Global, formerly Alex S.A." or "Alex S.A. trading as Alex Global"). Inference doesn't count; explicit textual evidence does.
 
-4. CRITICAL FOR business_type AND CLASSIFICATION: if the company appears to be a freight forwarder, customs broker, sourcing agent, or logistics middleman that ships diverse cargo on behalf of clients, set business_type to "forwarder" or "sourcing_agent" AND set commodity_group to "Logistics services" AND commodity_label to "LOGISTICS SERVICES" — regardless of what specific commodities you see in their shipping history. The commodity belongs to their CLIENTS, not them.
+4. Every factual claim should be supported by a source in sources_used. If only one or two sources actually support claims, that's fine — list those. Don't pad sources_used with irrelevant URLs.
 
-5. HANDLING NAME COLLISIONS — VERY IMPORTANT. Many companies share similar names. Legal-form suffixes like "S.A.", "Ltda.", "Co., Ltd.", "GmbH", "Limited", "Ltd." are generic and used in many countries; they DO NOT make a name unique.
+5. For lesser-known Chinese companies, watch for B2B directory listings (1688, Alibaba, Made-in-China), Panjiva snippets showing top HS codes and customers, Hong Kong / mainland China company registry data, and the company's own website.
+
+6. CRITICAL FOR business_type AND CLASSIFICATION: if the company appears to be a freight forwarder, customs broker, sourcing agent, or logistics middleman that ships diverse cargo on behalf of clients, set business_type to "forwarder" or "sourcing_agent" AND set commodity_group to "Logistics services" AND commodity_label to "LOGISTICS SERVICES" — regardless of what specific commodities you see in their shipping history. The commodity belongs to their CLIENTS, not them. BUT: do not invoke "sourcing_agent" as a generic catch-all. An HR consultancy is not a sourcing agent. A retail importer is not a sourcing agent. Use this category only when sources actually describe the company as a freight/customs/sourcing intermediary.
+
+7. HANDLING NAME COLLISIONS — VERY IMPORTANT. Many companies share similar names. Legal-form suffixes like "S.A.", "Ltda.", "Co., Ltd.", "GmbH", "Limited", "Ltd." are generic and used in many countries; they DO NOT make a name unique.
 
    When search results appear to describe MULTIPLE DISTINCT entities with similar names (different industries, different countries, different products), you MUST:
 
    a) NOT blend their information together into one profile. Each fact you record must come from sources consistent with one single entity.
 
-   b) Treat country-coded domain TLDs as the STRONGEST available disambiguator. If a search result is annotated with [DOMAIN: .com.py → Paraguay], that result is almost certainly about a Paraguayan entity — full stop. A result on a generic .com or LinkedIn page is much weaker evidence about which country a company is from. When a user specifies a Known region, ALWAYS prefer results whose TLD annotation matches that region, even if another result has more text content.
+   b) Treat country-coded domain TLDs as the STRONGEST available disambiguator. If a search result is annotated with [DOMAIN: .com.py → Paraguay], that result is almost certainly about a Paraguayan entity. A result on a generic .com or LinkedIn page is much weaker evidence about which country a company is from. When a user specifies a Known region, ALWAYS prefer results whose TLD annotation matches that region, even if another result has more text content.
 
-   c) E-COMMERCE AND RETAIL WEBSITES ARE VALID, AUTHORITATIVE EVIDENCE. A company's own product catalog, online store, or category-navigation page is direct proof of what they sell — it is just as authoritative as a "corporate About Us" page. Do not dismiss e-commerce sites as low-quality just because their visible text is product names and category links. If alex.com.py shows categories for motorcycles, cellphones, TVs, and appliances, that IS the evidence that Alex S.A. (Paraguay) sells those things. Use it directly.
+   c) E-COMMERCE AND RETAIL WEBSITES ARE VALID, AUTHORITATIVE EVIDENCE. A company's own product catalog, online store, or category-navigation page is direct proof of what they sell — it is just as authoritative as a "corporate About Us" page. Do not dismiss e-commerce sites as low-quality just because their visible text is product names and category links. Use them directly.
 
-   d) Pick the entity that is most clearly the subject of its own primary source. Treat the company's own domain (especially with a country-specific TLD) as the strongest signal. A LinkedIn or directory entry about a *different* company is not evidence about your subject.
+   d) Pick the entity that is most clearly the subject of its own primary source. Treat the company's own domain (especially with a country-specific TLD) as the strongest signal.
 
-   e) If you genuinely cannot tell which entity is meant, set confidence to "low" and explain the ambiguity in confidence_reason: "Multiple distinct companies match this name — found a [X] in [country] and a [Y] in [country]. Could not disambiguate from available signals."
+   e) A retailer in country X who imports goods is just as much a "shipper" in trade-data terms as a manufacturer in country Y who exports them. Do not dismiss retail or e-commerce businesses as unlikely shippers.
 
-   f) A retailer in country X who imports goods is just as much a "shipper" in trade-data terms as a manufacturer in country Y who exports them. Do not dismiss retail or e-commerce businesses as unlikely shippers — they're commonly consignees on inbound shipments. The word "distribuidora" / "distributor" in another result's name doesn't make that other entity more likely to be the right match; both retailers and distributors appear in trade data.
+8. Confidence calibration:
+   - "high" = at least one direct source clearly describes the requested company's products / business AND the source's named entity matches the requested name
+   - "medium" = good inference from indirect signals AND the entity is clearly identified by name in at least one source
+   - "low" = name match is weak, only indirect signals exist, OR you fell back to the rule-1 "didn't find the company" path
 
-6. Confidence calibration:
-   - "high" = at least one direct source clearly describes the company's products / business
-   - "medium" = good inference from indirect signals (e.g., name strongly implies product line + corroborating HS code data)
-   - "low" = guess from limited information, contradictory signals across sources, or unresolved name collision
+9. For Chinese B2B platforms, the search results may be in Chinese — handle them. Translate product descriptions to English in main_products.
 
-7. For Chinese B2B platforms, the search results may be in Chinese — handle them. Translate product descriptions to English in main_products.
+10. Search results in non-English languages (Spanish, Portuguese, Chinese, etc.) are equally authoritative — don't prefer English-language sources just because they're easier to parse. Local-language content from the company's own country is often the most accurate.
 
-8. Search results in non-English languages (Spanish, Portuguese, Chinese, etc.) are equally authoritative — don't prefer English-language sources just because they're easier to parse. Local-language content from the company's own country is often the most accurate.
-
-9. Return ONLY valid JSON. No commentary before or after. No markdown code fences.`;
+11. Return ONLY valid JSON. No commentary before or after. No markdown code fences.`;
 
 /* ===================== STATE ===================== */
 
@@ -680,7 +689,7 @@ async function research() {
     setProgress(steps);
 
     // Step 4: render
-    currentResult = { ...result, _query: name, _regionHint: region || null, _searchedAt: new Date().toISOString() };
+    currentResult = { ...result, _query: name, _regionHint: region || null, _searchedAt: new Date().toISOString(), _rawSources: searchResults.results || [] };
     renderResult(currentResult);
     steps[3].active = false; steps[3].done = true;
     setProgress(steps);
@@ -909,6 +918,26 @@ function renderResult(r) {
         </div>
         ${r.sources_consulted_summary ? `<div class="sources-consulted">${escapeHtml(r.sources_consulted_summary)}</div>` : ''}
       </div>
+
+      <!-- Raw search results (collapsible debug) -->
+      ${(r._rawSources && r._rawSources.length) ? `
+      <div class="result-section">
+        <details>
+          <summary style="cursor:pointer; font-size:11px; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted); font-weight:600;">
+            Raw search results (${r._rawSources.length}) — click to expand
+          </summary>
+          <div style="margin-top:10px; font-size:12px; line-height:1.5;">
+            ${r._rawSources.map((s, i) => `
+              <div style="padding:8px 0; border-bottom:1px dashed var(--border);">
+                <div style="font-weight:600;">[${i+1}] ${escapeHtml(s.title || '(no title)')}</div>
+                <div><a href="${escapeAttr(s.url || '')}" target="_blank" rel="noopener" style="color:var(--accent); font-size:11.5px; word-break:break-all;">${escapeHtml(s.url || '')}</a></div>
+                <div style="color:var(--text-muted); margin-top:3px;">${escapeHtml((s.content || '').slice(0, 200))}${(s.content || '').length > 200 ? '…' : ''}</div>
+              </div>
+            `).join('')}
+          </div>
+        </details>
+      </div>
+      ` : ''}
 
       <!-- Notes -->
       ${r.notes ? `
