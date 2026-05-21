@@ -440,14 +440,30 @@ CRITICAL RULES:
 
 4. CRITICAL FOR business_type AND CLASSIFICATION: if the company appears to be a freight forwarder, customs broker, sourcing agent, or logistics middleman that ships diverse cargo on behalf of clients, set business_type to "forwarder" or "sourcing_agent" AND set commodity_group to "Logistics services" AND commodity_label to "LOGISTICS SERVICES" — regardless of what specific commodities you see in their shipping history. The commodity belongs to their CLIENTS, not them.
 
-5. Confidence calibration:
+5. HANDLING NAME COLLISIONS — VERY IMPORTANT. Many companies share similar names. Legal-form suffixes like "S.A.", "Ltda.", "Co., Ltd.", "GmbH", "Limited", "Ltd." are generic and used in many countries; they DO NOT make a name unique.
+
+   When search results appear to describe MULTIPLE DISTINCT entities with similar names (different industries, different countries, different products), you MUST:
+
+   a) NOT blend their information together into one profile. Each fact you record must come from sources consistent with one single entity.
+
+   b) Pick the entity that is most clearly the subject of its own primary source (its own website, official registry entry, or directly-authored content). Treat the company's own domain as the strongest signal of what it actually is.
+
+   c) Use domain TLDs as strong country signals: .com.py = Paraguay, .com.cn = China, .com.br = Brazil, .com.ar = Argentina, .com.hk or .hk = Hong Kong, .com.mx = Mexico, .com.vn = Vietnam, .de = Germany, etc. A company website with a country-specific TLD almost always indicates an entity operating in that country.
+
+   d) If you genuinely cannot tell which entity is meant, set confidence to "low" and explain the ambiguity in confidence_reason: "Multiple distinct companies match this name — found a [X] in [country] and a [Y] in [country]. Could not disambiguate from available signals." Don't guess as if they were the same company.
+
+   e) Remember: a retailer in country X who imports goods is just as much a "shipper" in trade-data terms as a manufacturer in country Y who exports them. Don't dismiss retail businesses as unlikely shippers — they're commonly consignees on inbound shipments.
+
+6. Confidence calibration:
    - "high" = at least one direct source clearly describes the company's products / business
    - "medium" = good inference from indirect signals (e.g., name strongly implies product line + corroborating HS code data)
-   - "low" = guess from limited information, or contradictory signals across sources
+   - "low" = guess from limited information, contradictory signals across sources, or unresolved name collision
 
-6. For Chinese B2B platforms, the search results may be in Chinese — handle them. Translate product descriptions to English in main_products.
+7. For Chinese B2B platforms, the search results may be in Chinese — handle them. Translate product descriptions to English in main_products.
 
-7. Return ONLY valid JSON. No commentary before or after. No markdown code fences.`;
+8. Search results in non-English languages (Spanish, Portuguese, Chinese, etc.) are equally authoritative — don't prefer English-language sources just because they're easier to parse. Local-language content from the company's own country is often the most accurate.
+
+9. Return ONLY valid JSON. No commentary before or after. No markdown code fences.`;
 
 /* ===================== STATE ===================== */
 
