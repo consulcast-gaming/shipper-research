@@ -627,7 +627,7 @@ async function tavilySearch(query) {
     body: JSON.stringify({
       query: augmented,
       search_depth: 'advanced',
-      max_results: 8,
+      max_results: 5,
       include_answer: false,
       include_raw_content: false,
       include_images: false,
@@ -644,7 +644,7 @@ async function tavilySearch(query) {
 
 async function synthesise(companyName, searchResults) {
   const sourcesText = searchResults.results.map((r, i) =>
-    `[${i+1}] ${r.title}\nURL: ${r.url}\nContent: ${(r.content || '').slice(0, 1200)}`
+    `[${i+1}] ${r.title}\nURL: ${r.url}\nContent: ${(r.content || '').slice(0, 700)}`
   ).join('\n\n');
 
   const userPrompt = `Company name to research: ${companyName}
@@ -668,11 +668,18 @@ Return the JSON object now.`;
       ],
       temperature: 0.1,
       reasoning_effort: 'none',
-      max_tokens: 2048,
+      max_tokens: 1500,
     }),
   });
   if (!response.ok) {
     const text = await response.text();
+    // Give a friendlier message for the most common failure
+    if (response.status === 413 || /token/i.test(text)) {
+      throw new Error(`Groq rejected the request as too large (free-tier limit is 6,000 tokens/min). Try a shorter company name or wait a minute and retry.`);
+    }
+    if (response.status === 429) {
+      throw new Error(`Groq rate-limited (too many requests per minute). Wait ~60 seconds and try again.`);
+    }
     throw new Error(`Groq API error (${response.status}): ${text.slice(0, 200)}`);
   }
   const data = await response.json();
